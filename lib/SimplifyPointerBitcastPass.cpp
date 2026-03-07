@@ -405,6 +405,16 @@ bool clspv::SimplifyPointerBitcastPass::runOnImplicitGEP(Module &M) const {
           continue;
         }
 
+        // Skip CallInsts that PointerOperandNum doesn't handle (memcpy,
+        // memmove, and other non-atomic/non-SpirvOp calls). These would
+        // trigger llvm_unreachable in PointerOperandNum.
+        if (auto *call = dyn_cast<CallInst>(&I)) {
+          if (call->getCalledFunction() &&
+              call->getCalledFunction()->isIntrinsic()) {
+            continue;
+          }
+        }
+
         int Steps = 0;
         bool PerfectMatch;
         if (FindAliasingContainedType(source_ty, dest_ty, Steps, PerfectMatch,
