@@ -607,7 +607,11 @@ int RunPassPipeline(llvm::Module &M, llvm::raw_svector_ostream *binaryStream) {
     // This pass needs to be after every inlining to make sure we are capable of
     // removing every addrspacecast. It only needs to run if generic addrspace
     // is used.
-    if (clspv::Option::LanguageUsesGenericAddressSpace()) {
+    if (clspv::Option::LowerGenericAddrSpace()) {
+      pm.addPass(clspv::LowerGenericAddressSpacePass());
+    }
+    if (clspv::Option::LanguageUsesGenericAddressSpace() ||
+        clspv::Option::LowerGenericAddrSpace()) {
       pm.addPass(clspv::ReplaceOpenCLBuiltinPass());
       pm.addPass(clspv::LowerAddrSpaceCastPass());
     }
@@ -851,7 +855,8 @@ int ParseOptions(const int argc, const char *const argv[]) {
     return -1;
   }
 
-  if (clspv::Option::LanguageUsesGenericAddressSpace() &&
+  if ((clspv::Option::LanguageUsesGenericAddressSpace() ||
+       clspv::Option::LowerGenericAddrSpace()) &&
       !clspv::Option::InlineEntryPoints()) {
     llvm::errs() << "cannot compile languages that use the generic address "
                     "space (e.g. CLC++, CL2.0) without -inline-entry-points\n";
@@ -1242,7 +1247,7 @@ int CompilePrograms(const std::vector<std::string> &programs,
   modules.pop_back();
   llvm::Linker L(*module);
   for (auto &mod : modules) {
-    L.linkInModule(std::move(mod), 0);
+    L.linkInModule(std::move(mod), llvm::Linker::Flags::OverrideFromSrc);
   }
 
   return CompileModule("source", module, output_buffer, output_log);

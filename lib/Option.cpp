@@ -416,6 +416,11 @@ static llvm::cl::opt<bool> hack_logical_ptrtoint(
         "Allow ptrtoint on logical address spaces when it can be "
         "guaranteed that they won't be converted back to pointers."));
 
+static llvm::cl::opt<bool> lower_generic_addr_space(
+    "lower-generic-address-space", llvm::cl::init(false),
+    llvm::cl::desc("Lower generic address space (AS4) to global (AS1). "
+                   "Use for pre-compiled IR input containing generic pointers."));
+
 static llvm::cl::opt<bool>
     printf_support("enable-printf", llvm::cl::desc("Enable support for printf"),
                    llvm::cl::init(false));
@@ -564,6 +569,8 @@ std::set<FeatureMacro> EnabledFeatureMacros() { return enabled_feature_macros; }
 bool DecorateNonUniform() { return decorate_non_uniform; }
 
 bool PhysicalStorageBuffers() { return physical_storage_buffers; }
+
+bool LowerGenericAddrSpace() { return lower_generic_addr_space; }
 
 bool PrintfSupport() { return printf_support; }
 uint32_t PrintfBufferSize() { return printf_buffer_size; }

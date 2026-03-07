@@ -736,6 +736,7 @@ private:
   // Map from externally-initialized globals (promoted to StorageBuffer SSBOs)
   // to the member pointer type ID for OpAccessChain insertion.
   DenseMap<const GlobalVariable *, SPIRVID> SsboGlobalMemberPtrMap;
+
   // Bookkeeping for mapping kernel arguments to resource variables.
   struct ResourceVarInfo {
     ResourceVarInfo(int index_arg, unsigned set_arg, unsigned binding_arg,
@@ -2773,6 +2774,7 @@ void SPIRVProducerPassImpl::GenerateGlobalVar(GlobalVariable &GV) {
 
     return; // Skip normal GenerateGlobalVar path
   }
+
   const spv::BuiltIn BuiltinType = GetBuiltin(GV.getName());
   Type *Ty = GV.getType();
   PointerType *PTy = cast<PointerType>(Ty);
@@ -6027,6 +6029,7 @@ void SPIRVProducerPassImpl::GenerateInstruction(Instruction &I) {
 
     auto ptr = LD->getPointerOperand();
     auto ptr_ty = ptr->getType();
+
     // For globals promoted to StorageBuffer SSBO, insert OpAccessChain to
     // member 0 of the wrapper struct before loading.
     if (auto *GV = dyn_cast<GlobalVariable>(ptr)) {
@@ -6045,6 +6048,7 @@ void SPIRVProducerPassImpl::GenerateInstruction(Instruction &I) {
         break;
       }
     }
+
     SPIRVID result_type_id;
     if (LD->getType()->isPointerTy()) {
       result_type_id = getSPIRVType(LD->getType());
@@ -6109,6 +6113,7 @@ void SPIRVProducerPassImpl::GenerateInstruction(Instruction &I) {
         break;
       }
     }
+
     SPIRVOperandVec Ops;
     auto ptr = ST->getPointerOperand();
     auto ptr_ty = ptr->getType();
@@ -6201,6 +6206,7 @@ void SPIRVProducerPassImpl::GenerateInstruction(Instruction &I) {
     if (I.getType()->isIntegerTy(64)) {
       addCapability(spv::CapabilityInt64Atomics);
     }
+
     //
     // Generate OpAtomic*.
     //

@@ -298,6 +298,11 @@ bool DecorateNonUniform();
 // buffers
 bool PhysicalStorageBuffers();
 
+// Returns true if generic address space should be lowered to global.
+// Used for pre-compiled IR input (e.g. from llvm-spirv) that contains
+// generic address space pointers.
+bool LowerGenericAddrSpace();
+
 // Returns true if printf support is enabled
 bool PrintfSupport();
 
