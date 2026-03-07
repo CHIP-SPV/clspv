@@ -1011,6 +1011,32 @@ bool GetEquivalentBuiltinsWithoutGenericPointer(llvm::Module *module,
       continue;
     }
 
+    // If the function's pointer parameter no longer uses addrspace(4)
+    // (e.g. it was pre-converted to addrspace(1) for spir64 targets),
+    // rename the function to use PU3AS1 mangling to match the actual types,
+    // then skip — clspv's builtin library already has AS1 definitions.
+    {
+      bool has_as4 = false;
+      for (auto &Arg : F.args()) {
+        if (auto *PT = llvm::dyn_cast<llvm::PointerType>(Arg.getType())) {
+          if (PT->getAddressSpace() == 4) {
+            has_as4 = true;
+            break;
+          }
+        }
+      }
+      if (!has_as4) {
+        // Rename from PU3AS4 to PU3AS1 to match actual address space.
+        auto fname = F.getName().str();
+        auto pos = fname.find("PU3AS4");
+        if (pos != std::string::npos) {
+          fname.replace(pos, 6, "PU3AS1");
+          F.setName(fname);
+        }
+        continue;
+      }
+    }
+
     auto get_fct_decl = [](llvm::Function &F) {
       std::string str;
       llvm::raw_string_ostream stream(str);
