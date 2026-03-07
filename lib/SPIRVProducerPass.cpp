@@ -3742,6 +3742,28 @@ SPIRVProducerPassImpl::GenerateClspvInstruction(CallInst *Call,
     auto *arg0 = dyn_cast<ConstantInt>(Call->getArgOperand(0));
     spv::Op opcode = static_cast<spv::Op>(arg0->getZExtValue());
     if (opcode != spv::OpNop) {
+      // If this is an atomic op on a 64-bit integer, declare Int64Atomics.
+      switch (opcode) {
+      case spv::OpAtomicIAdd:
+      case spv::OpAtomicISub:
+      case spv::OpAtomicExchange:
+      case spv::OpAtomicCompareExchange:
+      case spv::OpAtomicIIncrement:
+      case spv::OpAtomicIDecrement:
+      case spv::OpAtomicUMin:
+      case spv::OpAtomicSMin:
+      case spv::OpAtomicUMax:
+      case spv::OpAtomicSMax:
+      case spv::OpAtomicAnd:
+      case spv::OpAtomicOr:
+      case spv::OpAtomicXor:
+        if (Call->getType()->isIntegerTy(64))
+          addCapability(spv::CapabilityInt64Atomics);
+        break;
+      default:
+        break;
+      }
+
       SPIRVOperandVec Ops;
 
       if (!Call->getType()->isVoidTy()) {
@@ -6042,6 +6064,10 @@ void SPIRVProducerPassImpl::GenerateInstruction(Instruction &I) {
       llvm_unreachable("Unsupported instruction???");
     }
 
+    // If the atomic operates on a 64-bit integer, declare Int64Atomics.
+    if (I.getType()->isIntegerTy(64)) {
+      addCapability(spv::CapabilityInt64Atomics);
+    }
     //
     // Generate OpAtomic*.
     //
