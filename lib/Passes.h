@@ -38,6 +38,7 @@
 #include "LogicalPointerToIntPass.h"
 #include "LongVectorLoweringPass.h"
 #include "LowerAddrSpaceCastPass.h"
+#include "LowerGenericAddressSpacePass.h"
 #include "LowerPrivatePointerPHIPass.h"
 #include "MultiVersionUBOFunctionsPass.h"
 #include "NativeMathPass.h"
@@ -70,6 +71,7 @@
 #include "UndoSRetPass.h"
 #include "UndoTranslateSamplerFoldPass.h"
 #include "UndoTruncateToOddIntegerPass.h"
+#include "StripFloat64Pass.h"
 #include "ZeroInitializeAllocasPass.h"
 
 #endif

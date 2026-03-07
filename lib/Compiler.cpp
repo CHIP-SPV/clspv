@@ -720,6 +720,8 @@ int RunPassPipeline(llvm::Module &M, llvm::raw_svector_ostream *binaryStream) {
     }
 
     pm.addPass(clspv::ShareModuleScopeVariablesPass());
+    // Strip functions using double when -fp64=0 to avoid Float64 capability.
+    pm.addPass(clspv::StripFloat64Pass());
     // Specialize images before assigning descriptors to disambiguate the
     // various types.
     pm.addPass(clspv::SpecializeImageTypesPass());

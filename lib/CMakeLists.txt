@@ -104,6 +104,8 @@ add_library(clspv_passes OBJECT
   ${CMAKE_CURRENT_SOURCE_DIR}/UndoSRetPass.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/UndoTranslateSamplerFoldPass.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/UndoTruncateToOddIntegerPass.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/LowerGenericAddressSpacePass.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/StripFloat64Pass.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/ZeroInitializeAllocasPass.cpp
 )
 
