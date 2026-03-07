@@ -13,6 +13,7 @@
 // limitations under the License.
 
 #include "llvm/IR/Constants.h"
+#include "llvm/IR/Metadata.h"
 #include "llvm/IR/Operator.h"
 
 #include "AnnotationToMetadataPass.h"
@@ -79,5 +80,29 @@ clspv::AnnotationToMetadataPass::run(Module &M, ModuleAnalysisManager &) {
       break;
     }
   }
+  // Also pick up intel_reqd_sub_group_size from function metadata.
+  // llvm-spirv reverse-translates OpExecutionMode SubgroupSize N into this
+  // metadata on kernel functions. Convert it to EntryPointAttributes so it
+  // survives optimization passes and reaches SPIRVProducerPass.
+  for (auto &F : M) {
+    if (F.getCallingConv() != llvm::CallingConv::SPIR_KERNEL)
+      continue;
+    if (auto *MD = F.getMetadata("intel_reqd_sub_group_size")) {
+      if (MD->getNumOperands() >= 1) {
+        if (auto *CI = mdconst::dyn_extract<ConstantInt>(MD->getOperand(0))) {
+          auto &context = M.getContext();
+          NamedMDNode *md_node = M.getOrInsertNamedMetadata(
+              clspv::EntryPointAttributesMetadataName());
+          std::string attr = "intel_reqd_sub_group_size(" +
+                             std::to_string(CI->getZExtValue()) + ")";
+          MDTuple *entry = MDTuple::get(
+              context, {MDString::get(context, F.getName()),
+                        MDString::get(context, attr)});
+          md_node->addOperand(entry);
+        }
+      }
+    }
+  }
+
   return PreservedAnalyses::none();
 }
