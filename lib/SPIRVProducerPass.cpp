@@ -733,6 +733,9 @@ private:
 
   bool TestOutput;
 
+  // Map from externally-initialized globals (promoted to StorageBuffer SSBOs)
+  // to the member pointer type ID for OpAccessChain insertion.
+  DenseMap<const GlobalVariable *, SPIRVID> SsboGlobalMemberPtrMap;
   // Bookkeeping for mapping kernel arguments to resource variables.
   struct ResourceVarInfo {
     ResourceVarInfo(int index_arg, unsigned set_arg, unsigned binding_arg,
@@ -2698,6 +2701,78 @@ void SPIRVProducerPassImpl::GenerateGlobalVar(GlobalVariable &GV) {
   std::vector<SPIRVID> &BuiltinDimVec = getBuiltinDimVec();
   const DataLayout &DL = GV.getParent()->getDataLayout();
 
+  // Externally-initialized globals in the global address space cannot use
+  // PhysicalStorageBuffer storage class (which forbids OpVariable). Promote
+  // them to StorageBuffer SSBOs with a Block-decorated struct wrapper.
+  if (GV.isExternallyInitialized() &&
+      GV.getType()->getAddressSpace() == clspv::AddressSpace::Global &&
+      clspv::Option::PhysicalStorageBuffers()) {
+    auto &Ctx = module->getContext();
+    Type *ElemTy = GV.getValueType();
+
+    // Create SPIR-V struct type { ElemTy } with Block decoration
+    auto elem_id = getSPIRVType(ElemTy, /*needs_layout=*/true);
+
+    SPIRVOperandVec Ops;
+    Ops << elem_id;
+    auto struct_id = addSPIRVInst<kTypes>(spv::OpTypeStruct, Ops);
+
+    // Block decoration on the struct
+    Ops.clear();
+    Ops << struct_id << spv::DecorationBlock;
+    addSPIRVInst<kAnnotations>(spv::OpDecorate, Ops);
+
+    // MemberDecorate Offset 0 for member 0
+    Ops.clear();
+    Ops << struct_id << 0u << spv::DecorationOffset << 0u;
+    addSPIRVInst<kAnnotations>(spv::OpMemberDecorate, Ops);
+
+    // Pointer type: StorageBuffer { ElemTy }*
+    Ops.clear();
+    Ops << spv::StorageClassStorageBuffer << struct_id;
+    auto ptr_struct_id = addSPIRVInst<kTypes>(spv::OpTypePointer, Ops);
+
+    // Pointer type: StorageBuffer ElemTy* (for OpAccessChain results)
+    Ops.clear();
+    Ops << spv::StorageClassStorageBuffer << elem_id;
+    auto ptr_member_id = addSPIRVInst<kTypes>(spv::OpTypePointer, Ops);
+
+    // Create OpVariable (no initializer for StorageBuffer)
+    auto var_id = addSPIRVGlobalVariable(ptr_struct_id,
+                                          spv::StorageClassStorageBuffer,
+                                          SPIRVID(), /*add_interface=*/true);
+
+    // Map the LLVM global to the SPIR-V variable
+    VMap[&GV] = var_id;
+
+    // Store the member pointer type for load/store interception
+    SsboGlobalMemberPtrMap[&GV] = ptr_member_id;
+
+    // Allocate descriptor set and binding
+    const uint32_t descriptor_set = TakeDescriptorIndex(module);
+    Ops.clear();
+    Ops << var_id << spv::DecorationDescriptorSet << descriptor_set;
+    addSPIRVInst<kAnnotations>(spv::OpDecorate, Ops);
+
+    Ops.clear();
+    Ops << var_id << spv::DecorationBinding << 0;
+    addSPIRVInst<kAnnotations>(spv::OpDecorate, Ops);
+
+    // Emit ProgramScopeVariablesStorageBuffer reflection so the runtime
+    // creates the backing buffer. Initial data is zeros matching the type size.
+    uint64_t type_size = DL.getTypeAllocSize(ElemTy);
+    std::string hexdata(type_size * 2, '0');
+    auto data_str_id = addSPIRVInst<kDebug>(spv::OpString, hexdata.c_str());
+
+    Ops.clear();
+    Ops << getSPIRVType(Type::getVoidTy(Ctx)) << getReflectionImport()
+        << reflection::ExtInstProgramScopeVariablesStorageBuffer
+        << getSPIRVInt32Constant(descriptor_set)
+        << getSPIRVInt32Constant(0) << data_str_id;
+    addSPIRVInst<kReflection>(spv::OpExtInst, Ops);
+
+    return; // Skip normal GenerateGlobalVar path
+  }
   const spv::BuiltIn BuiltinType = GetBuiltin(GV.getName());
   Type *Ty = GV.getType();
   PointerType *PTy = cast<PointerType>(Ty);
@@ -5952,6 +6027,24 @@ void SPIRVProducerPassImpl::GenerateInstruction(Instruction &I) {
 
     auto ptr = LD->getPointerOperand();
     auto ptr_ty = ptr->getType();
+    // For globals promoted to StorageBuffer SSBO, insert OpAccessChain to
+    // member 0 of the wrapper struct before loading.
+    if (auto *GV = dyn_cast<GlobalVariable>(ptr)) {
+      auto cv_it = SsboGlobalMemberPtrMap.find(GV);
+      if (cv_it != SsboGlobalMemberPtrMap.end()) {
+        SPIRVOperandVec AcOps;
+        AcOps << cv_it->second << PointerID << getSPIRVInt32Constant(0);
+        auto member_ptr = addSPIRVInst(spv::OpAccessChain, AcOps);
+
+        auto result_id = getSPIRVType(LD->getType(), /*needs_layout=*/true);
+        SPIRVOperandVec LdOps;
+        LdOps << result_id << member_ptr;
+        LdOps << spv::MemoryAccessAlignedMask;
+        LdOps << static_cast<uint32_t>(LD->getAlign().value());
+        RID = addSPIRVInst(spv::OpLoad, LdOps);
+        break;
+      }
+    }
     SPIRVID result_type_id;
     if (LD->getType()->isPointerTy()) {
       result_type_id = getSPIRVType(LD->getType());
@@ -5964,8 +6057,19 @@ void SPIRVProducerPassImpl::GenerateInstruction(Instruction &I) {
 
     // Align MemoryOperand helps load vectorization and is required for
     // PhysicalStorageBuffer
-    Ops << spv::MemoryAccessAlignedMask;
-    Ops << static_cast<uint32_t>(LD->getAlign().value());
+    {
+      Ops << spv::MemoryAccessAlignedMask;
+      uint32_t align_val = LD->getAlign().value();
+      // PhysicalStorageBuffer requires alignment >= largest scalar type size.
+      // Use ABI alignment which is always a power of 2.
+      if (clspv::Option::PhysicalStorageBuffers()) {
+        auto &DL = LD->getModule()->getDataLayout();
+        uint32_t abi_align = DL.getABITypeAlign(LD->getType()).value();
+        if (align_val < abi_align)
+          align_val = abi_align;
+      }
+      Ops << align_val;
+    }
 
     RID = addSPIRVInst(spv::OpLoad, Ops);
 
@@ -5987,6 +6091,24 @@ void SPIRVProducerPassImpl::GenerateInstruction(Instruction &I) {
           ST->getValueOperand()->getType()->getPointerAddressSpace());
     }
 
+    // For globals promoted to StorageBuffer SSBO, insert OpAccessChain to
+    // member 0 of the wrapper struct before storing.
+    if (auto *GV = dyn_cast<GlobalVariable>(ST->getPointerOperand())) {
+      auto cv_it = SsboGlobalMemberPtrMap.find(GV);
+      if (cv_it != SsboGlobalMemberPtrMap.end()) {
+        SPIRVID var_id = getSPIRVValue(GV);
+        SPIRVOperandVec AcOps;
+        AcOps << cv_it->second << var_id << getSPIRVInt32Constant(0);
+        auto member_ptr = addSPIRVInst(spv::OpAccessChain, AcOps);
+
+        SPIRVOperandVec StOps;
+        StOps << member_ptr << ST->getValueOperand();
+        StOps << spv::MemoryAccessAlignedMask;
+        StOps << static_cast<uint32_t>(ST->getAlign().value());
+        RID = addSPIRVInst(spv::OpStore, StOps);
+        break;
+      }
+    }
     SPIRVOperandVec Ops;
     auto ptr = ST->getPointerOperand();
     auto ptr_ty = ptr->getType();
@@ -6012,8 +6134,19 @@ void SPIRVProducerPassImpl::GenerateInstruction(Instruction &I) {
 
     // Align MemoryOperand helps store vectorization and is required for
     // PhysicalStorageBuffer
-    Ops << spv::MemoryAccessAlignedMask;
-    Ops << static_cast<uint32_t>(ST->getAlign().value());
+    {
+      Ops << spv::MemoryAccessAlignedMask;
+      uint32_t align_val = ST->getAlign().value();
+      // PhysicalStorageBuffer requires alignment >= largest scalar type size.
+      // Use ABI alignment which is always a power of 2.
+      if (clspv::Option::PhysicalStorageBuffers()) {
+        auto &DL = ST->getModule()->getDataLayout();
+        uint32_t abi_align = DL.getABITypeAlign(value_ty).value();
+        if (align_val < abi_align)
+          align_val = abi_align;
+      }
+      Ops << align_val;
+    }
 
     RID = addSPIRVInst(spv::OpStore, Ops);
     break;
