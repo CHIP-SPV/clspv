@@ -101,15 +101,49 @@ clspv::LowerGenericAddressSpacePass::run(Module &M,
               ToErase.push_back(ITP);
               Progress = true;
             }
+          } else if (auto *BC = dyn_cast<BitCastInst>(&I)) {
+            // Handle no-op bitcasts between AS4 pointers. These become
+            // broken when the source operand is rewritten from AS4 to AS1.
+            if (BC->getType()->isPointerTy() &&
+                BC->getType()->getPointerAddressSpace() == kGenericAS) {
+              auto *Src = BC->getOperand(0);
+              if (Src->getType()->isPointerTy() &&
+                  Src->getType()->getPointerAddressSpace() != kGenericAS) {
+                // Source already remapped to non-AS4, replace bitcast with
+                // source directly.
+                SmallVector<Use *, 8> Uses;
+                for (auto &U : BC->uses())
+                  Uses.push_back(&U);
+                for (auto *U : Uses)
+                  U->set(Src);
+                ToErase.push_back(BC);
+                Progress = true;
+              }
+            }
           } else if (auto *GEP = dyn_cast<GetElementPtrInst>(&I)) {
-            // GEP result type follows the pointer operand's AS.
-            // If the pointer is AS4, rebuild with AS1 pointer.
-            if (GEP->getType()->getPointerAddressSpace() == kGenericAS &&
-                GEP->getPointerOperand()->getType()->getPointerAddressSpace() !=
-                    kGenericAS) {
-              // Pointer operand already remapped, but GEP type still shows
-              // AS4. This shouldn't happen with opaque pointers — GEP result
-              // AS follows input. Skip.
+            // GEP stores its result type at construction time. If the pointer
+            // operand was rewritten from AS4 to AS1, the GEP result type is
+            // stale (still AS4). Rebuild the GEP with the correct AS.
+            if (GEP->getType()->isPointerTy() &&
+                GEP->getType()->getPointerAddressSpace() == kGenericAS) {
+              unsigned PtrAS =
+                  GEP->getPointerOperand()->getType()->getPointerAddressSpace();
+              if (PtrAS != kGenericAS) {
+                // Rebuild GEP with correct result type
+                SmallVector<Value *, 4> Indices(GEP->idx_begin(),
+                                                GEP->idx_end());
+                auto *NewGEP = GetElementPtrInst::Create(
+                    GEP->getSourceElementType(), GEP->getPointerOperand(),
+                    Indices, "", GEP->getIterator());
+                NewGEP->setIsInBounds(GEP->isInBounds());
+                SmallVector<Use *, 8> Uses;
+                for (auto &U : GEP->uses())
+                  Uses.push_back(&U);
+                for (auto *U : Uses)
+                  U->set(NewGEP);
+                ToErase.push_back(GEP);
+                Progress = true;
+              }
             }
           } else if (auto *PHI = dyn_cast<PHINode>(&I)) {
             if (PHI->getType()->isPointerTy() &&
