@@ -490,6 +490,20 @@ int SetCompilerInstanceOptions(
 }
 
 int RunPassPipeline(llvm::Module &M, llvm::raw_svector_ostream *binaryStream) {
+  // Restore externally_initialized on __chip_var_* and
+  // __chip_module_has_no_IGBAs globals immediately, before any passes run.
+  // The attribute is lost during the SPIR-V roundtrip (llvm-spirv) and must
+  // be present before clspv's pass pipeline to avoid crashes.
+  for (auto &GV : M.globals()) {
+    if (GV.hasName() &&
+        (GV.getName().starts_with("__chip_var_") ||
+         GV.getName() == "__chip_module_has_no_IGBAs") &&
+        GV.getType()->getAddressSpace() == 1 /* Global */ &&
+        !GV.isExternallyInitialized()) {
+      GV.setExternallyInitialized(true);
+    }
+  }
+
   llvm::LoopAnalysisManager lam;
   llvm::FunctionAnalysisManager fam;
   llvm::CGSCCAnalysisManager cgam;
@@ -563,6 +577,14 @@ int RunPassPipeline(llvm::Module &M, llvm::raw_svector_ostream *binaryStream) {
     // AutoPodArgsPass/DeclarePushConstantsPass/DefineOpenCLWorkItemBuiltinsPass.
     if (clspv::Option::PhysicalStorageBuffers()) {
       pm.addPass(clspv::PhysicalPointerArgsPass());
+    }
+
+    // LowerGenericAddressSpacePass must run before AutoPodArgsPass because
+    // AutoPodArgsPass calls extendedAlignment() which crashes on
+    // ptr addrspace(4) (generic) in struct types.  Running this early converts
+    // generic AS pointers to global AS, preventing the crash.
+    if (clspv::Option::LowerGenericAddrSpace()) {
+      pm.addPass(clspv::LowerGenericAddressSpacePass());
     }
 
     pm.addPass(clspv::AutoPodArgsPass());

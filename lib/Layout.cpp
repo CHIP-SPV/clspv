@@ -20,7 +20,8 @@ using namespace llvm;
 
 namespace {
 bool isScalarType(Type *type) {
-  return type->isIntegerTy() || type->isFloatingPointTy();
+  return type->isIntegerTy() || type->isFloatingPointTy() ||
+         type->isPointerTy();
 }
 
 uint64_t structAlignment(StructType *type,
@@ -36,6 +37,9 @@ uint64_t structAlignment(StructType *type,
 uint64_t scalarAlignment(Type *type) {
   // A scalar of size N has a scalar alignment of N.
   if (isScalarType(type)) {
+    // Opaque pointers have 0 scalar size; treat as 8 bytes (64-bit target).
+    if (type->isPointerTy())
+      return 8;
     return type->getScalarSizeInBits() / 8;
   }
 

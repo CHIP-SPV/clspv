@@ -1650,6 +1650,9 @@ Type *SPIRVProducerPassImpl::CanonicalType(Type *type) {
     // For the purposes of our Vulkan SPIR-V type system, constant and global
     // are conflated.
     unsigned AddrSpace = ptr_ty->getAddressSpace();
+    // Generic (AS4) pointers are lowered to Global (AS1) by
+    // LowerGenericAddressSpacePass, but CanonicalType doesn't handle this
+    // because pointer-in-struct support requires deeper SPIR-V type changes.
     if (AddressSpace::Constant == AddrSpace) {
       if (!clspv::Option::ConstantArgsInUniformBuffer() &&
           !clspv::Option::PhysicalStorageBuffers()) {
